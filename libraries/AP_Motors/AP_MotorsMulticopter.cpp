@@ -212,6 +212,13 @@ const AP_Param::GroupInfo AP_MotorsMulticopter::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("SAFE_TIME", 42, AP_MotorsMulticopter, _safe_time, AP_MOTORS_SAFE_TIME_DEFAULT),
 
+    // @Param: ROLL_PITCH_FF
+    // @DisplayName: How much to feed forward from pitch to roll and vice versa
+    // @Description: How much to feed forward from pitch to roll and vice versa
+    // @Values: 1:normal,-1:reverse
+    // @User: Standard
+    AP_GROUPINFO("RP_FF", 43, AP_MotorsMulticopter, _rp_ff, 0),
+
     AP_GROUPEND
 };
 
