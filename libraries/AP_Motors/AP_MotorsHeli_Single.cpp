@@ -16,8 +16,10 @@
 #include <stdlib.h>
 #include <AP_HAL/AP_HAL.h>
 #include <SRV_Channel/SRV_Channel.h>
-#include "AP_MotorsHeli_Single.h"
 #include <GCS_MAVLink/GCS.h>
+#include <AP_BattMonitor/AP_BattMonitor.h>
+#include "AP_MotorsHeli_Single.h"
+
 
 extern const AP_HAL::HAL& hal;
 
@@ -137,6 +139,50 @@ const AP_Param::GroupInfo AP_MotorsHeli_Single::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("COL2YAW", 21,  AP_MotorsHeli_Single, _collective_yaw_scale, 0),
 
+    // @Param: DDFP_THST_EXPO
+    // @DisplayName: DDFP Tail Rotor Thrust Curve Expo
+    // @Description: Tail rotor DDFP motor thrust curve exponent (0.0 for linear to 1.0 for second order curve)
+    // @Range: -1 1
+    // @User: Standard
+    AP_GROUPINFO("DDFP_THST_EXPO", 22, AP_MotorsHeli_Single,  _ddfp_thst_expo, 0.55),
+
+    // @Param: DDFP_SPIN_MIN
+    // @DisplayName: DDFP Tail Rotor Motor Spin minimum
+    // @Description: Point at which the thrust starts expressed as a number from 0 to 1 in the entire output range.  Should be higher than MOT_SPIN_ARM.
+    // @Values: 0.0:Low, 0.15:Default, 0.3:High
+    // @User: Standard
+    AP_GROUPINFO("DDFP_SPIN_MIN", 23, AP_MotorsHeli_Single,  _ddfp_spin_min, 0.15),
+
+    // @Param: DDFP_SPIN_MAX
+    // @DisplayName: DDFP Tail Rotor Motor Spin maximum
+    // @Description: Point at which the thrust saturates expressed as a number from 0 to 1 in the entire output range
+    // @Values: 0.9:Low, 0.95:Default, 1.0:High
+    // @User: Standard
+    AP_GROUPINFO("DDFP_SPIN_MAX", 24, AP_MotorsHeli_Single,  _ddfp_spin_max, 0.95),
+
+    // @Param: DDFP_BAT_IDX
+    // @DisplayName: DDFP Tail Rotor Battery compensation index
+    // @Description: Which battery monitor should be used for doing compensation
+    // @Values: 0:First battery, 1:Second battery
+    // @User: Standard
+    AP_GROUPINFO("DDFP_BAT_IDX", 25, AP_MotorsHeli_Single, _ddfp_batt_idx, 0),
+
+    // @Param: DDFP_BAT_V_MAX
+    // @DisplayName: Battery voltage compensation maximum voltage
+    // @Description: Battery voltage compensation maximum voltage (voltage above this will have no additional scaling effect on thrust).  Recommend 4.2 * cell count, 0 = Disabled
+    // @Range: 6 53
+    // @Units: V
+    // @User: Standard
+    AP_GROUPINFO("DDFP_BAT_V_MAX", 26, AP_MotorsHeli_Single, _ddfp_batt_voltage_max, AP_MOTORS_HELI_SINGLE_BAT_VOLT_MAX_DEFAULT),
+
+    // @Param: DDFP_BAT_V_MIN
+    // @DisplayName: Battery voltage compensation minimum voltage
+    // @Description: Battery voltage compensation minimum voltage (voltage below this will have no additional scaling effect on thrust).  Recommend 3.3 * cell count, 0 = Disabled
+    // @Range: 6 42
+    // @Units: V
+    // @User: Standard
+    AP_GROUPINFO("DDFP_BAT_V_MIN", 27, AP_MotorsHeli_Single, _ddfp_batt_voltage_min, AP_MOTORS_HELI_SINGLE_BAT_VOLT_MIN_DEFAULT),
+
     AP_GROUPEND
 };
 
@@ -158,6 +204,11 @@ void AP_MotorsHeli_Single::set_update_rate( uint16_t speed_hz )
         mask |= 1U << (AP_MOTORS_MOT_5);
     }
     rc_set_freq(mask, _speed_hz);
+
+    // setup battery voltage filtering
+    _batt_voltage_filt.set_cutoff_frequency(AP_MOTORS_HELI_SINGLE_BATT_VOLT_FILT_HZ);
+    _batt_voltage_filt.reset(1.0f);
+
 }
 
 // init_outputs - initialise Servo/PWM ranges and endpoints
@@ -545,6 +596,11 @@ void AP_MotorsHeli_Single::output_to_motors()
         _servo4_out = -_servo4_out;
     }
 
+    if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CW || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW){
+        // calc filtered battery voltage and lift_max
+        ddfp_update_lift_max_from_batt_voltage();
+    }
+
     switch (_spool_state) {
         case SpoolState::SHUT_DOWN:
             // sends minimum values out to the motors
@@ -566,9 +622,9 @@ void AP_MotorsHeli_Single::output_to_motors()
             update_motor_control(ROTOR_CONTROL_ACTIVE);
             if (_tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CW || _tail_type == AP_MOTORS_HELI_SINGLE_TAILTYPE_DIRECTDRIVE_FIXEDPITCH_CCW){
                 // constrain output so that motor never fully stops
-                 _servo4_out = constrain_float(_servo4_out, -0.9f, 1.0f);
+//                 _servo4_out = constrain_float(_servo4_out, -0.9f, 1.0f);
                 // output yaw servo to tail rsc
-                rc_write_angle(AP_MOTORS_MOT_4, _servo4_out * YAW_SERVO_MAX_ANGLE);
+                rc_write_angle(AP_MOTORS_MOT_4, ddfp_thrust_to_actuator(_servo4_out) * YAW_SERVO_MAX_ANGLE);
             }
             break;
         case SpoolState::SPOOLING_DOWN:
@@ -669,3 +725,54 @@ bool AP_MotorsHeli_Single::parameter_check(bool display_msg) const
     // check parent class parameters
     return AP_MotorsHeli::parameter_check(display_msg);
 }
+
+// apply_thrust_curve_scaling - returns throttle in the range 0 ~ 1
+float AP_MotorsHeli_Single::ddfp_apply_thrust_curve_and_voltage_scaling(float thrust) const
+{
+    float battery_scale = 1.0;
+    if (is_positive(_batt_voltage_filt.get())) {
+        battery_scale = 1.0 / _batt_voltage_filt.get();
+    }
+    // apply thrust curve - domain -1.0 to 1.0, range -1.0 to 1.0
+    float ddfp_thrust_expo = constrain_float(_ddfp_thst_expo, -1.0f, 1.0f);
+    if (is_zero(ddfp_thrust_expo)) {
+        // zero expo means linear, avoid floating point exception for small values
+        return _lift_max * thrust * battery_scale;
+    }
+    float throttle_ratio = ((ddfp_thrust_expo - 1.0f) + safe_sqrt((1.0f - ddfp_thrust_expo) * (1.0f - ddfp_thrust_expo) + 4.0f * ddfp_thrust_expo * _lift_max * thrust)) / (2.0f * ddfp_thrust_expo);
+    return constrain_float(throttle_ratio * battery_scale, 0.0f, 1.0f);
+}
+
+// converts desired thrust to linearized actuator output in a range of 0~1
+float AP_MotorsHeli_Single::ddfp_thrust_to_actuator(float thrust_in) const
+{
+    thrust_in = constrain_float(thrust_in, 0.0f, 1.0f);
+    return _ddfp_spin_min + (_ddfp_spin_max - _ddfp_spin_min) * ddfp_apply_thrust_curve_and_voltage_scaling(thrust_in);
+}
+
+// update_lift_max from battery voltage - used for voltage compensation
+void AP_MotorsHeli_Single::ddfp_update_lift_max_from_batt_voltage()
+{
+    // sanity check battery_voltage_min is not too small
+    // if disabled or misconfigured exit immediately
+    float _batt_voltage_resting_estimate = AP::battery().voltage_resting_estimate(_ddfp_batt_idx);
+    if ((_ddfp_batt_voltage_max <= 0) || (_ddfp_batt_voltage_min >= _ddfp_batt_voltage_max) || (_batt_voltage_resting_estimate < 0.25f * _ddfp_batt_voltage_min)) {
+        _batt_voltage_filt.reset(1.0f);
+        _lift_max = 1.0f;
+        return;
+    } 
+
+    _ddfp_batt_voltage_min.set(MAX(_ddfp_batt_voltage_min, _ddfp_batt_voltage_max * 0.6f));
+
+    // contrain resting voltage estimate (resting voltage is actual voltage with sag removed based on current draw and resistance)
+    _batt_voltage_resting_estimate = constrain_float(_batt_voltage_resting_estimate, _ddfp_batt_voltage_min, _ddfp_batt_voltage_max);
+
+    // filter at 0.5 Hz
+    float batt_voltage_filt = _batt_voltage_filt.apply(_batt_voltage_resting_estimate / _ddfp_batt_voltage_max, _dt);
+
+    // calculate lift max
+    float ddfp_thrust_expo = constrain_float(_ddfp_thst_expo, -1.0f, 1.0f);
+    _lift_max = batt_voltage_filt * (1 - ddfp_thrust_expo) + ddfp_thrust_expo * batt_voltage_filt * batt_voltage_filt;
+}
+
+

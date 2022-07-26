@@ -34,6 +34,11 @@
 // maximum number of swashplate servos
 #define AP_MOTORS_HELI_SINGLE_NUM_SWASHPLATE_SERVOS            3
 
+#define AP_MOTORS_HELI_SINGLE_BATT_VOLT_FILT_HZ                0.5f    // battery voltage filtered at 0.5hz
+#define AP_MOTORS_HELI_SINGLE_BAT_VOLT_MAX_DEFAULT             0.0f    // voltage limiting max default
+#define AP_MOTORS_HELI_SINGLE_BAT_VOLT_MIN_DEFAULT             0.0f    // voltage limiting min default (voltage dropping below this level will have no effect)
+
+
 /// @class      AP_MotorsHeli_Single
 class AP_MotorsHeli_Single : public AP_MotorsHeli {
 public:
@@ -41,7 +46,8 @@ public:
     AP_MotorsHeli_Single(uint16_t speed_hz = AP_MOTORS_HELI_SPEED_DEFAULT) :
         AP_MotorsHeli(speed_hz),
         _tail_rotor(SRV_Channel::k_heli_tail_rsc, AP_MOTORS_HELI_SINGLE_TAILRSC),
-        _swashplate()
+        _swashplate(),
+        _lift_max(1.0f)
     {
         AP_Param::setup_object_defaults(this, var_info);
     };
@@ -119,6 +125,15 @@ protected:
     //  pwm value is an actual pwm value that will be output, normally in the range of 1000 ~ 2000
     virtual void _output_test_seq(uint8_t motor_seq, int16_t pwm) override;
 
+    // ddfp_apply_thrust_curve_scaling - returns throttle in the range 0 ~ 1
+    float ddfp_apply_thrust_curve_and_voltage_scaling(float thrust) const;
+
+    // converts desired thrust to linearized actuator output in a range of 0~1
+    float ddfp_thrust_to_actuator(float thrust_in) const;
+
+    // update_lift_max from battery voltage - used for voltage compensation
+    void ddfp_update_lift_max_from_batt_voltage();
+
     // external objects we depend upon
     AP_MotorsHeli_RSC   _tail_rotor;            // tail rotor
     AP_MotorsHeli_Swash _swashplate;            // swashplate
@@ -143,6 +158,15 @@ protected:
     AP_Int8         _flybar_mode;               // Flybar present or not.  Affects attitude controller used during ACRO flight mode
     AP_Int16        _direct_drive_tailspeed;    // Direct Drive VarPitch Tail ESC speed (0 ~ 1000)
     AP_Float        _collective_yaw_scale;      // Feed-forward compensation to automatically add rudder input when collective pitch is increased. Can be positive or negative depending on mechanics.
+    AP_Float        _ddfp_thst_expo;            // DDFP Tail Rotor Thrust Curve Expo
+    AP_Float        _ddfp_spin_min;             // DDFP Tail Rotor Motor Spin Minimum
+    AP_Float        _ddfp_spin_max;             // DDFP Tail Rotor Motor Spin Maximum
+    AP_Int8         _ddfp_batt_idx;             // DDFP Tail Rotor Battery index used for compensation
+    AP_Float        _ddfp_batt_voltage_max;     // maximum voltage used to scale lift
+    AP_Float        _ddfp_batt_voltage_min;     // minimum voltage used to scale lift
 
     bool            _acro_tail = false;
+    // battery voltage, current and air pressure compensation variables
+    LowPassFilterFloat  _batt_voltage_filt;     // filtered battery voltage expressed as a percentage (0 ~ 1.0) of batt_voltage_max
+    float               _lift_max;              // maximum lift ratio from battery voltage
 };
