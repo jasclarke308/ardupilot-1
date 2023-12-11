@@ -116,7 +116,7 @@ public:
     void        set_turbine_start(bool turbine_start) {_turbine_start = turbine_start; }
 
     // output - update value to send to ESC/Servo
-    void        output(RotorControlState state);
+    void        output(RotorControlState state, float delta_speed = 0.0f, float battery_pct = 1.0f);
 
     // var_info for holding Parameter information
     static const struct AP_Param::GroupInfo var_info[];

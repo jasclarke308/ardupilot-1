@@ -181,7 +181,7 @@ const AP_Param::GroupInfo AP_MotorsHeli_Single::var_info[] = {
     // @Range: 6 42
     // @Units: V
     // @User: Standard
-    AP_GROUPINFO("DDFP_BAT_V_MIN", 27, AP_MotorsHeli_Single, _ddfp_batt_voltage_min, AP_MOTORS_HELI_SINGLE_BAT_VOLT_MIN_DEFAULT),
+    AP_GROUPINFO("DDPF_BAT_V_MIN", 27, AP_MotorsHeli_Single, _ddfp_batt_voltage_min, AP_MOTORS_HELI_SINGLE_BAT_VOLT_MIN_DEFAULT),
 
     AP_GROUPEND
 };
@@ -433,8 +433,8 @@ uint32_t AP_MotorsHeli_Single::get_motor_mask()
 void AP_MotorsHeli_Single::update_motor_control(RotorControlState state)
 {
     // Send state update to motors
-    _tail_rotor.output(state);
-    _main_rotor.output(state);
+    _tail_rotor.output(state, 0.0f, (float) _batt_voltage_filt.get());
+    _main_rotor.output(state, 0.0f, (float) _batt_voltage_filt.get());
 
     if (state == ROTOR_CONTROL_STOP){
         // set engine run enable aux output to not run position to kill engine when disarmed

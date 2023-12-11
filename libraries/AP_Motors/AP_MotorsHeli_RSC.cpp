@@ -231,7 +231,7 @@ void AP_MotorsHeli_RSC::set_throttle_curve()
 }
 
 // output - update value to send to ESC/Servo
-void AP_MotorsHeli_RSC::output(RotorControlState state)
+void AP_MotorsHeli_RSC::output(RotorControlState state, float delta_speed, float battery_pct)
 {
     // _rotor_RPM available to the RSC output
     const AP_RPM *rpm = AP_RPM::get_singleton();
@@ -318,8 +318,10 @@ void AP_MotorsHeli_RSC::output(RotorControlState state)
                 // set control rotor speed to ramp slewed value between idle and desired speed
                 _control_output = get_idle_output() + (_rotor_ramp_output * (_desired_speed - get_idle_output()));
             } else if (_control_mode == ROTOR_CONTROL_MODE_THROTTLECURVE) {
+                if (battery_pct < 0.5f || battery_pct > 1.0f) { battery_pct = 1.0f ; } //if battery out of range, remove voltage compensation
+                // adjust motor pwm out with voltage compensation
+                float throttlecurve = calculate_throttlecurve(_collective_in) / battery_pct;
                 // throttle output from throttle curve based on collective position
-                float throttlecurve = calculate_throttlecurve(_collective_in);
                 _control_output = get_idle_output() + (_rotor_ramp_output * (throttlecurve - get_idle_output()));
             } else if (_control_mode == ROTOR_CONTROL_MODE_AUTOTHROTTLE) {
                 autothrottle_run();
@@ -337,7 +339,11 @@ void AP_MotorsHeli_RSC::output(RotorControlState state)
     }
 
     // output to rsc servo
-    write_rsc(_control_output);
+    if (state == ROTOR_CONTROL_ACTIVE){
+        write_rsc(_control_output + delta_speed);
+    } else {
+        write_rsc(_control_output);
+    }
 }
 
 // update_rotor_ramp - slews rotor output scalar between 0 and 1, outputs float scalar to _rotor_ramp_output
