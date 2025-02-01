@@ -352,8 +352,8 @@ uint32_t AP_MotorsHeli_Single::get_motor_mask()
 void AP_MotorsHeli_Single::update_motor_control(AP_MotorsHeli_RSC::RotorControlState state)
 {
     // Send state update to motors
-    _tail_rotor.output(state);
-    _main_rotor.output(state);
+    _tail_rotor.output(state); // voltage compensation already applied to tail rotor
+    _main_rotor.output(state, 0.0f, (float) thr_lin.batt_voltage_filt.get());
 
     if (state == AP_MotorsHeli_RSC::RotorControlState::STOP){
         // set engine run enable aux output to not run position to kill engine when disarmed

@@ -123,7 +123,7 @@ public:
     void        set_turbine_start(bool turbine_start) {_turbine_start = turbine_start; }
 
     // output - update value to send to ESC/Servo
-    void        output(RotorControlState state);
+    void        output(RotorControlState state, float delta_speed = 0.0f, float battery_pct = 1.0f);
 
     // Return mask of output channels which the RSC is outputting on
     uint32_t    get_output_mask() const;
